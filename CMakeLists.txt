@@ -1,0 +1,67 @@
+cmake_minimum_required(VERSION 3.20)
+project(KasperskyFileCollector LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+option(FC_BUILD_TESTS "Build unit tests" ON)
+option(FC_ENABLE_TSAN "Build with ThreadSanitizer (if supported)" OFF)
+option(FC_ENABLE_ASAN "Build with AddressSanitizer + UBSan (if supported)" OFF)
+
+if(FC_ENABLE_TSAN AND FC_ENABLE_ASAN)
+    message(FATAL_ERROR "TSan and ASan cannot be enabled simultaneously")
+endif()
+
+if(MSVC)
+    if(FC_ENABLE_TSAN)
+        message(WARNING "ThreadSanitizer is not supported by MSVC, building without it")
+    endif()
+    if(FC_ENABLE_ASAN)
+        add_compile_options(/fsanitize=address /Zi)
+        add_link_options(/INCREMENTAL:NO)
+        string(REPLACE "/RTC1" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
+        message(STATUS "AddressSanitizer: enabled")
+    endif()
+elseif(FC_ENABLE_TSAN OR FC_ENABLE_ASAN)
+    if(FC_ENABLE_TSAN)
+        set(FC_SAN_NAME "ThreadSanitizer")
+        set(FC_SAN_CHECK FC_HAS_TSAN)
+        set(FC_SAN_FLAGS -fsanitize=thread)
+    else()
+        set(FC_SAN_NAME "AddressSanitizer + UBSan")
+        set(FC_SAN_CHECK FC_HAS_ASAN)
+        set(FC_SAN_FLAGS -fsanitize=address,undefined -fno-sanitize-recover=undefined)
+    endif()
+
+    include(CheckCXXSourceCompiles)
+    string(JOIN " " CMAKE_REQUIRED_FLAGS ${FC_SAN_FLAGS})
+    set(CMAKE_REQUIRED_LINK_OPTIONS ${FC_SAN_FLAGS})
+    check_cxx_source_compiles("int main() { return 0; }" ${FC_SAN_CHECK})
+    unset(CMAKE_REQUIRED_FLAGS)
+    unset(CMAKE_REQUIRED_LINK_OPTIONS)
+
+    if(${FC_SAN_CHECK})
+        add_compile_options(${FC_SAN_FLAGS} -g -fno-omit-frame-pointer)
+        add_link_options(${FC_SAN_FLAGS})
+        message(STATUS "${FC_SAN_NAME}: enabled")
+    else()
+        message(WARNING "${FC_SAN_NAME} is not supported by this toolchain, building without it")
+    endif()
+endif()
+
+add_library(FileCollector
+        src/FileCollector.cpp
+        src/IntervalSet.cpp
+)
+target_include_directories(FileCollector PUBLIC include)
+
+if(MSVC)
+    target_compile_options(FileCollector PRIVATE /W4)
+else()
+    target_compile_options(FileCollector PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+if(FC_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
